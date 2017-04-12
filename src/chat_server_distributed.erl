@@ -15,41 +15,46 @@
 %     {channel, Name, Messages}
 %   where Messages is a list of messages, of the form:
 %     {message, UserName, ChannelName, MessageText, SendTime}
+
 chat_server_actor(Users, LoggedIn, Channels, ParentID) ->
     io:format("distributed chat server intialized"),
     receive
-        {Sender, chat_log_in, Username, UserProcessId} -> 
+        {_, chat_log_in, Username, UserProcessId} -> 
             NewLoggedIn = dict:store(Username, UserProcessId, LoggedIn),
             chat_server_actor(Users,NewLoggedIn,Channels,ParentID);
         
-        {Sender, join_channel, UserName, ChannelName} ->
-            User = dict:fetch(UserName, Users), % assumes the user exists
+        {Sender, join_channel, Username, ChannelName} ->
+            User = dict:fetch(Username, Users), % assumes the user exists
             NewUser = join_channel(User, ChannelName),
-            NewUsers = dict:store(UserName, NewUser, Users),
+            NewUsers = dict:store(Username, NewUser, Users),
             Sender ! {self(), channel_joined},
+            ParentID ! {self(), joined_channel, Username, ChannelName},
             chat_server_actor(NewUsers, LoggedIn, Channels, ParentID);
             % TODO sync this info with the main server
 
-        {Sender, send_message, UserName, ChannelName, MessageText, SendTime} ->
-            Message = {message, UserName, ChannelName, MessageText, SendTime},
+        {Sender, send_message, Username, ChannelName, MessageText, SendTime} ->
+            Message = {message, Username, ChannelName, MessageText, SendTime},
             % 1. Store message in its channel
             NewChannels = store_message(Message, Channels),
             % 2. Send logged in users the message, if they joined this channel
             broadcast_message_to_members(Users, LoggedIn, Message),
             Sender ! {self(), message_sent},
+            ParentID ! {self(), sent_message, {message, Username, ChannelName, MessageText, SendTime}},
             chat_server_actor(Users, LoggedIn, NewChannels, ParentID);
-            % TODO sync this info with the main server
+            
         
         {Sender, get_channel_history, ChannelName} ->
             {channel, ChannelName, Messages} = find_or_create_channel(ChannelName, Channels),
             Sender ! {self(), channel_history, Messages},
             chat_server_actor(Users, LoggedIn, Channels,ParentID);
 
-        {Sender, log_out, UserName} ->
-            NewLoggedIn = dict:erase(UserName, LoggedIn),
+        {Sender, log_out, Username} ->
+            NewLoggedIn = dict:erase(Username, LoggedIn),
             Sender ! {self(), logged_out},
+            % notify the main server about the log out
+            ParentID ! {self(),logged_out, Username},
             chat_server_actor(Users, NewLoggedIn, Channels,ParentID)
-            % TODO sync this info with the main server
+            
     end.
 
 

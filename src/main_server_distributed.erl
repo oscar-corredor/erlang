@@ -44,9 +44,7 @@ main_server_actor(Users, LoggedIn, Channels, ChatServers) ->
                 _ ->
                     io:format("suitable server found"), 
                     {server, Pid, Reference,LoggedInUsers} = AvailableServer,
-                    %for now we'll remove and insert the key again although this is extremely inefficient
-                    PreServers = dict:erase(Pid,ChatServers),
-                    NewChatServers = dict:store(Pid,{server,Pid,Reference,LoggedInUsers+1},PreServers),
+                    NewChatServers = dict:store(Pid,{server,Pid,Reference,LoggedInUsers+1},ChatServers),
                     %log in the user in the main server
                     NewLoggedIn = dict:store(Username, {Sender, Pid}, LoggedIn),
                     %log user in the chat server
@@ -56,7 +54,25 @@ main_server_actor(Users, LoggedIn, Channels, ChatServers) ->
                     main_server_actor(Users, NewLoggedIn, Channels, NewChatServers)
 
 
-            end
+            end;
+        % SYNCING MESSAGES
+        {Sender, logged_out, Username} ->        
+            NewLoggedIn = dict:erase(UserName, LoggedIn),
+            % update the chat server count
+            {server, Pid, Reference,LoggedInUsers} = dict:fetch(Sender, ChatServers),
+            NewChatServers = dict:store(Pid,{server,Pid, Reference, LoggedInUsers-1}),
+            server_actor(Users, NewLoggedIn, Channels, NewChatServers);
+
+        {Sender, joined_channel, Username, ChannelName} ->
+            User = dict:fetch(Username, Users), % assumes the user exists
+            NewUser = join_channel(User, ChannelName),
+            NewUsers = dict:store(Username, NewUser, Users),
+            server_actor(NewUsers, LoggedIn, Channels, ChatServers);
+
+        {Sender sent_message, Message} ->            
+            % 1. Store message in its channel
+            NewChannels = store_message(Message, Channels),
+            chat_server_actor(Users, LoggedIn, NewChannels, ChatServers);
     end.
 
 % * ChatServers is a dictionary of user names to tuples of the form:
@@ -71,3 +87,11 @@ get_chat_server([Key|T], ChatServers) ->
             Result;
         _ -> get_chat_server(T,ChatServers)
     end.
+
+join_channel({user, Name, Subscriptions}, ChannelName) ->
+    {user, Name, sets:add_element(ChannelName,Subscriptions)}.
+
+store_message(Message, Channels) ->
+    {message, _UserName, ChannelName, _MessageText, _SendTime} = Message,
+    {channel, ChannelName, Messages} = find_or_create_channel(ChannelName, Channels),
+    dict:store(ChannelName, {channel, ChannelName, Messages ++ [Message]}, Channels).

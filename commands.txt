@@ -1,0 +1,5 @@
+c(main_server_distributed, [debug_info]).
+debugger:start().
+A = spawn(main_server_distributed,main_server_actor,[dict:new(),dict:new(),dict:new(),dict:new()]).
+A ! {self(),register,oscar}.
+A ! {self(),log_in,oscar}.  
