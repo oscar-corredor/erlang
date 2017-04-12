@@ -8,11 +8,16 @@
 
 % * Users is a dictionary of user names to tuples of the form:
 %     {user, Name, Subscriptions}
+%   where Subscriptions is a set of channels that the user joined.
 % * ChatServers is a dictionary of user names to tuples of the form:
-%   {server, Pid, Reference,LoggedInUsers} where LoggedInUsers is the ammount of 
+%   Pid,{server,Reference,LoggedInUsers} where LoggedInUsers is the ammount of 
 %   users currently logged in that particular server
 % * LoggedIn is a dictionary of the names of logged in users, their pid and the
 %   pid of the server they logged in to {UserPiD, ChatServerPid}
+% * Channels is a dictionary of channel names to tuples:
+%     {channel, Name, Messages}
+%   where Messages is a list of messages, of the form:
+%     {message, UserName, ChannelName, MessageText, SendTime}
 main_server_actor(Users, LoggedIn, Channels, ChatServers) ->
     
     receive
@@ -31,12 +36,12 @@ main_server_actor(Users, LoggedIn, Channels, ChatServers) ->
                 %In case of undefined, create a new server and log the user in
                 undefined ->
                     io:format("No suitable server found"), 
-                    {Pid, Ref} = spawn_monitor(chat_server_distributed, chat_server_actor,[Users,dict:new(),Channels,self()]),
-                    NewChatServers = dict:store(Pid,{server, Pid, Ref,1},ChatServers),
+                    {Pid, Ref} = spawn_monitor(chat_server_distributed, chat_server_actor,[dict:new(),Channels,self()]),
+                    NewChatServers = dict:store(Pid,{server,Ref,1},ChatServers),
                     %log in the user in the main server
                     NewLoggedIn = dict:store(Username, {Sender, Pid}, LoggedIn),
-                    %log user in the new chat server
-                    Pid ! {self(), chat_log_in, Username, UserProcess},
+                    %log user in the new chat server, send the users subscriptions also
+                    Pid ! {self(), chat_log_in, Username, Sender, get_user_subscriptions(Username,Users)},
                     %answer to the user that he's been logged in along with the new PID for communication
                     Sender ! {self(), logged_in, Pid},
                     main_server_actor(Users, NewLoggedIn, Channels, NewChatServers);
@@ -44,36 +49,44 @@ main_server_actor(Users, LoggedIn, Channels, ChatServers) ->
                 _ ->
                     io:format("suitable server found"), 
                     {server, Pid, Reference,LoggedInUsers} = AvailableServer,
-                    NewChatServers = dict:store(Pid,{server,Pid,Reference,LoggedInUsers+1},ChatServers),
+                    NewChatServers = dict:store(Pid,{server,Reference,LoggedInUsers+1},ChatServers),
                     %log in the user in the main server
                     NewLoggedIn = dict:store(Username, {Sender, Pid}, LoggedIn),
                     %log user in the chat server
-                    Pid ! {self(), chat_log_in,Username},
+                    Pid ! {self(), chat_log_in, Username, Sender, get_user_subscriptions(Username,Users)},                    
                     %answer to the user that he's been logged in along with the new PID for communication
                     Sender ! {self(), logged_in, Pid},
                     main_server_actor(Users, NewLoggedIn, Channels, NewChatServers)
 
 
             end;
-        % SYNCING MESSAGES
+        % syncing messages received from chat_server_distributed
         {Sender, logged_out, Username} ->        
-            NewLoggedIn = dict:erase(UserName, LoggedIn),
-            % update the chat server count
+            NewLoggedIn = dict:erase(Username, LoggedIn),
+            % update the server's logged in users count
             {server, Pid, Reference,LoggedInUsers} = dict:fetch(Sender, ChatServers),
-            NewChatServers = dict:store(Pid,{server,Pid, Reference, LoggedInUsers-1}),
-            server_actor(Users, NewLoggedIn, Channels, NewChatServers);
+            NewChatServers = dict:store(Pid,{server,Reference, LoggedInUsers-1}),
+            main_server_actor(Users, NewLoggedIn, Channels, NewChatServers);
 
-        {Sender, joined_channel, Username, ChannelName} ->
+        {_, joined_channel, Username, ChannelName} ->
             User = dict:fetch(Username, Users), % assumes the user exists
             NewUser = join_channel(User, ChannelName),
-            NewUsers = dict:store(Username, NewUser, Users),
-            server_actor(NewUsers, LoggedIn, Channels, ChatServers);
+            NewUsers = dict:store(Username, NewUser, Users),            
+            main_server_actor(NewUsers, LoggedIn, Channels, ChatServers);
 
-        {Sender sent_message, Message} ->            
+        {Sender, sent_message, Message} ->   
+            {message, SenderName, ChannelName, MessageText, SendTime} = Message,         
             % 1. Store message in its channel
             NewChannels = store_message(Message, Channels),
-            chat_server_actor(Users, LoggedIn, NewChannels, ChatServers);
+            % distribute the new message accross the current chat servers
+            broadcast_message_to_servers(ChatServers, {self(), new_message, SenderName, ChannelName, MessageText, SendTime}, Sender)
+            main_server_actor(Users, LoggedIn, NewChannels, ChatServers)        
     end.
+
+get_user_subscriptions(Username,Users) ->
+    {user, _,Subscriptions} = dict:fetch(Username,Users),
+    Subscriptions.
+
 
 % * ChatServers is a dictionary of user names to tuples of the form:
 %   {server, Pid, Reference,LoggedInUsers}
@@ -95,3 +108,26 @@ store_message(Message, Channels) ->
     {message, _UserName, ChannelName, _MessageText, _SendTime} = Message,
     {channel, ChannelName, Messages} = find_or_create_channel(ChannelName, Channels),
     dict:store(ChannelName, {channel, ChannelName, Messages ++ [Message]}, Channels).
+
+% Broadcast `Message` to the different chat servers, except for the messages originating server.
+% {Sender, new_message, Username, ChannelName, MessageText, SendTime} ->
+broadcast_message_to_servers(ChatServers, Message, OriginatingServer) ->
+    
+    % For each LoggedIn user, fetch his subscriptions and check whether those
+    % contain the channel
+    Servers = fun(Pid,{server,Reference,LoggedInUsers}) ->        
+        OriginatingServer /= Pid        
+    end,
+    PendingServers = dict:filter(Servers, ChatServers),
+    % Send messages
+    dict:map(fun(Pid, _) ->
+        Pid ! Message
+    end, PendingServers),
+    ok.
+
+% Find channel, or create new channel
+find_or_create_channel(ChannelName, Channels) ->
+    case dict:find(ChannelName, Channels) of
+        {ok, Channel} -> Channel;
+        error ->         {channel, ChannelName, []}
+    end.
