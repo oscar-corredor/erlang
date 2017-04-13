@@ -16,8 +16,7 @@
 %   where Messages is a list of messages, of the form:
 %     {message, UserName, ChannelName, MessageText, SendTime}
 
-chat_server_actor(LoggedIn, Channels, ParentID) ->
-    io:format("distributed chat server intialized"),
+chat_server_actor(LoggedIn, Channels, ParentID) ->    
     receive
         {_, chat_log_in, Username, UserProcessId, Subscriptions} -> 
             NewLoggedIn = dict:store(Username, {UserProcessId, Subscriptions}, LoggedIn),
@@ -31,7 +30,7 @@ chat_server_actor(LoggedIn, Channels, ParentID) ->
             ParentID ! {self(), joined_channel, Username, ChannelName},
             chat_server_actor(NewLoggedIn, Channels, ParentID);
             
-
+        % for when a user sends a message
         {Sender, send_message, Username, ChannelName, MessageText, SendTime} ->
             Message = {message, Username, ChannelName, MessageText, SendTime},
             % 1. Store message in its channel
@@ -41,8 +40,9 @@ chat_server_actor(LoggedIn, Channels, ParentID) ->
             Sender ! {self(), message_sent},
             ParentID ! {self(), sent_message, {message, Username, ChannelName, MessageText, SendTime}},
             chat_server_actor(LoggedIn, NewChannels, ParentID);
-
-        {Sender, new_message, Username, ChannelName, MessageText, SendTime} ->
+        
+        % FOR WHEN A MESSAGE WAS SENT IN ANOTHER CHAT SERVER
+        {_, new_message, Username, ChannelName, MessageText, SendTime} ->
             Message = {message, Username, ChannelName, MessageText, SendTime},
             % 1. Store message in its channel
             NewChannels = store_message(Message, Channels),
