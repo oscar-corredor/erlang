@@ -30,6 +30,7 @@ chat_server_actor(LoggedIn, Channels, ParentID) ->
             
         % for when a user sends a message
         {Sender, send_message, Username, ChannelName, MessageText, SendTime} ->
+            
             Message = {message, Username, ChannelName, MessageText, SendTime},
             % 1. Store message in its channel
             NewChannels = store_message(Message, Channels),
@@ -37,15 +38,16 @@ chat_server_actor(LoggedIn, Channels, ParentID) ->
             Sender ! {self(), message_sent},
             broadcast_message_to_members(LoggedIn, Message),
             ParentID ! {self(), sent_message, {message, Username, ChannelName, MessageText, SendTime}},
+            
             chat_server_actor(LoggedIn, NewChannels, ParentID);
         
         % FOR WHEN A MESSAGE WAS SENT IN ANOTHER CHAT SERVER
-        {_, new_message, Username, ChannelName, MessageText, SendTime} ->
+        {_, new_message, Username, ChannelName, MessageText, SendTime} ->            
             Message = {message, Username, ChannelName, MessageText, SendTime},
             % 1. Store message in its channel
             NewChannels = store_message(Message, Channels),
             % 2. Send logged in users the message if they joined this channel
-            broadcast_message_to_members(LoggedIn, Message),
+            broadcast_message_to_members(LoggedIn, Message),            
             chat_server_actor(LoggedIn, NewChannels, ParentID);
             
         

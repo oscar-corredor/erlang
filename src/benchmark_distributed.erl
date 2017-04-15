@@ -5,6 +5,8 @@
         test_login_distributed/0,
         login_distributed/1,
         test_send_message_distributed/0,
+        second_test_send_message_distributed/0,
+        test_get_channel_history_distributed/0,
         initialize_server_and_some_clients_distributed/4]).
 
 
@@ -149,7 +151,7 @@ initialize_server_and_some_clients_distributed(NumberOfChannels, NumberOfUsers, 
         ClientPid = spawn_link(fun () ->
             {ChatServerPid, logged_in} = server:log_in(ServerPid, I),
             BenchmarkerPid ! {self(), logged_in, I, ChatServerPid},
-            Fun(I)
+            Fun(I,ChatServerPid)
         end),        
         {I, ClientPid}
         end,
@@ -217,10 +219,10 @@ receive_new_messages(BenchmarkerPid, I) ->
 test_send_message_distributed() ->
     ChannelsNumber =1,
     UserNumber = 1000,    
-    run_benchmark("send_message_for_each_user",
+    run_benchmark("send_message_for_each_user_distributed",
         fun () ->
             BenchmarkerPid = self(),
-            ClientFun = fun(I) ->
+            ClientFun = fun(I,ChatId) ->
                 receive_new_messages(BenchmarkerPid, I)
             end,
             io:format("Initializing scenario~n"),
@@ -274,30 +276,32 @@ test_get_channel_history() ->
             lists:seq(1, 100000))
         end,
         30).
+
+        
 test_get_channel_history_distributed() ->
     ChannelsNumber =1,
-    UserNumber = 1000,    
-    run_benchmark("send_message_for_each_user",
+    UserNumber = 10000,    
+    run_benchmark("get_channel_history_distributed",
         fun () ->
             BenchmarkerPid = self(),
-            ClientFun = fun(I) ->
-                receive_new_messages(BenchmarkerPid, I)
+            ClientFun = fun(I, ChatServerID) ->
+                server:get_channel_history(ChatServerID,1),
+                BenchmarkerPid ! {done, I}
             end,
             io:format("Initializing scenario~n"),
             {ServerPid, _Channels, Users, Clients} =
                 initialize_server_and_some_clients_distributed(ChannelsNumber,UserNumber, UserNumber,ClientFun),
-            ChosenUserNames = lists:sublist(dict:fetch_keys(Users), UserNumber),
-            send_message_for_users_distributed(ServerPid, ChosenUserNames, Users, Clients)
+            % Verify that every client has finished
+            lists:foreach(fun (I) ->
+            receive {done, I} ->
+                ok
+            end
+        end,
+        lists:seq(1, UserNumber))            
         end,
         30).
-
-
-
-
-
-
-
-
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% LOGIN TEST
 test_login_distributed() ->
     run_benchmark("login",
     fun() ->
@@ -353,4 +357,52 @@ login_centralized(NumberOfActiveUsers) ->
                 ok
             end
         end,
-        lists:seq(1, NumberOfActiveUsers)).    
+        lists:seq(1, NumberOfActiveUsers)).
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 2ND ATTEMPT AT SEND MESSAGE
+second_test_send_message_distributed() ->
+    ChannelsNumber =1,
+    UserNumber = 18,
+    MessageNumber = 1,
+    run_benchmark("send_message_for_each_user_distributed",
+        fun () ->
+            BenchmarkerPid = self(),
+            ClientFun = fun(I, ChatServerPid) ->                
+                if I =< MessageNumber ->                                                
+                        server:send_message(ChatServerPid, I, 1, "Test"),
+                        io:format("Message sent~n"),
+                        %expect 1 message less (the one it just sent)
+                        receive_messages(BenchmarkerPid, MessageNumber-1,I);
+                    true ->
+                        %expect every message because it hasn't sent any
+                        receive_messages(BenchmarkerPid, MessageNumber,I)
+                end
+            end,
+            io:format("Initializing scenario~n"),
+            {ServerPid, _Channels, Users, Clients} =
+                initialize_server_and_some_clients_distributed(ChannelsNumber,UserNumber, UserNumber,ClientFun),
+            %await for the ok message
+            io:format("waiting for replies~n"),
+            lists:foreach(fun (I) ->
+                                    receive {done, I} ->
+                                        io:format("received done message: ~p ~n",[I])
+                                        
+                                    end
+                        end,
+                        lists:seq(1, UserNumber))
+        end,
+        1).
+
+receive_messages(BenchmarkerPid, MessageNumber,I) ->    
+    if 
+        MessageNumber > 0 ->            
+            receive {_, new_message, _} ->                   
+                receive_messages(BenchmarkerPid, MessageNumber-1,I)
+            end;
+        true -> 
+            BenchmarkerPid ! {done, I}
+    end.
+        
+
+    
+    
