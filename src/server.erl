@@ -61,7 +61,7 @@ join_channel(ServerPid, UserName, ChannelName) ->
 send_message(ServerPid, UserName, ChannelName, MessageText) ->
     ServerPid ! {self(), send_message, UserName, ChannelName, MessageText, os:system_time()},
     receive
-        {_ResponsePid, message_sent} ->
+        {_ResponsePid, message_sent} ->         
             message_sent
     end.
 

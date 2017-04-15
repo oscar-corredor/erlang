@@ -43,14 +43,14 @@ main_server_actor(Users, LoggedIn, Channels, ChatServers) ->
             main_server_actor(NewUsers, LoggedIn, Channels, ChatServers);
         
         {Sender, log_in, Username} ->
-            io:format("Log in message received~n"),
+            % io:format("Log in message received~n"),
             % TODO CHECK IF THE USER HAS ALREADY LOGGED IN and if it exists
             % find a server for the user
             AvailableServer = get_chat_server(dict:fetch_keys(ChatServers),ChatServers),
             case AvailableServer of
                 %In case of undefined, create a new server and log the user in
                 undefined ->
-                    io:format("No suitable server found~n"), 
+                    % io:format("No suitable server found~n"), 
                     {Pid, Ref} = spawn_monitor(chat_server_distributed, chat_server_actor,[dict:new(),Channels,self()]),
                     NewChatServers = dict:store(Pid,{server,Ref,1},ChatServers),
                     %log in the user in the main server
@@ -63,7 +63,7 @@ main_server_actor(Users, LoggedIn, Channels, ChatServers) ->
                     main_server_actor(Users, NewLoggedIn, Channels, NewChatServers);
 
                 _ ->
-                    io:format("suitable server found~n"), 
+                    % io:format("suitable server found~n"), 
                     {Pid, {server, Reference,LoggedInUsers}} = AvailableServer,
                     NewChatServers = dict:store(Pid,{server,Reference,LoggedInUsers+1},ChatServers),
                     %log in the user in the main server
@@ -81,7 +81,7 @@ main_server_actor(Users, LoggedIn, Channels, ChatServers) ->
             NewLoggedIn = dict:erase(Username, LoggedIn),
             % update the server's logged in users count
             {server, Pid, Reference,LoggedInUsers} = dict:fetch(Sender, ChatServers),
-            NewChatServers = dict:store(Pid,{server,Reference, LoggedInUsers-1}),
+            NewChatServers = dict:store(Pid,{server,Reference, LoggedInUsers-1},ChatServers),
             main_server_actor(Users, NewLoggedIn, Channels, NewChatServers);
 
         {_, joined_channel, Username, ChannelName} ->
@@ -112,7 +112,7 @@ get_chat_server([], _) ->
 get_chat_server([Key|T], ChatServers) ->
     Result = dict:fetch(Key,ChatServers),
     case Result of
-        {server,_,LoggedInUsers} when LoggedInUsers < 100 ->
+        {server,_,LoggedInUsers} when LoggedInUsers < 250 ->
             {Key, Result};
         _ -> get_chat_server(T,ChatServers)
     end.

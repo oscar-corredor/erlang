@@ -6,11 +6,9 @@
 
 % The server actor works like a small database and encapsulates all state of
 % this simple implementation.
-%
-% * Users is a dictionary of user names to tuples of the form:
-%     {user, Name, Subscriptions}
+% * LoggedIn is a dictionary of the names of logged in users, 
+%   their pid and their channels.{UserProcessId, Subscriptions}
 %   where Subscriptions is a set of channels that the user joined.
-% * LoggedIn is a dictionary of the names of logged in users, their pid and their channels.
 % * Channels is a dictionary of channel names to tuples:
 %     {channel, Name, Messages}
 %   where Messages is a list of messages, of the form:
@@ -35,9 +33,9 @@ chat_server_actor(LoggedIn, Channels, ParentID) ->
             Message = {message, Username, ChannelName, MessageText, SendTime},
             % 1. Store message in its channel
             NewChannels = store_message(Message, Channels),
-            % 2. Send logged in users the message, if they joined this channel
-            broadcast_message_to_members(LoggedIn, Message),
+            % 2. Send logged in users the message, if they joined this channel            
             Sender ! {self(), message_sent},
+            broadcast_message_to_members(LoggedIn, Message),
             ParentID ! {self(), sent_message, {message, Username, ChannelName, MessageText, SendTime}},
             chat_server_actor(LoggedIn, NewChannels, ParentID);
         
@@ -83,6 +81,7 @@ find_or_create_channel(ChannelName, Channels) ->
 
 % Broadcast `Message` to `Users` if they joined the channel and are logged in.
 % (But don't send it to the sender.)
+% {UserProcessId, Subscriptions}
 broadcast_message_to_members(LoggedIn, Message) ->
     {message, SenderName, ChannelName, _MessageText, _SendTime} = Message,
     % For each LoggedIn user, fetch his subscriptions and check whether those
@@ -93,7 +92,7 @@ broadcast_message_to_members(LoggedIn, Message) ->
     end,
     LoggedInAndSubscribed = dict:filter(Subscribed, LoggedIn),
     % Send messages
-    dict:map(fun(_, UserPid) ->
-        UserPid ! {self(), new_message, Message}
+    dict:map(fun(_, {UserProcessId, _}) ->
+        UserProcessId ! {self(), new_message, Message}
     end, LoggedInAndSubscribed),
     ok.

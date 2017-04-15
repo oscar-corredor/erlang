@@ -5,8 +5,10 @@ A ! {self(),register,oscar}.
 A ! {self(),log_in,oscar}.  
 
 
-c(benchmark_distributed, [debug_info]).
 c(main_server_distributed, [debug_info]).
 c(chat_server_distributed, [debug_info]).
+c(benchmark_distributed, [debug_info]).
 debugger:start().
-benchmark_distributed:test_login_distributed(10).
+benchmark_distributed:test_send_message_distributed().
+benchmark_distributed:initialize_server_and_some_clients_distributed(1, 2, 2, B).
+benchmark_distributed:test_login_distributed().

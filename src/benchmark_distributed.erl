@@ -1,6 +1,11 @@
 -module(benchmark_distributed).
 
--export([test_get_channel_history/0, test_login_distributed/1]).
+-export([test_get_channel_history/0,
+        test_login_centralized/0,
+        test_login_distributed/0,
+        login_distributed/1,
+        test_send_message_distributed/0,
+        initialize_server_and_some_clients_distributed/4]).
 
 
 
@@ -58,10 +63,10 @@ run_benchmark_once(Name, Fun, N) ->
     io:format("~s done~n", [Name]).
 
 % Creates a server with 10 channels and 5000 users.
-initialize_server_distributed() ->
+initialize_server_distributed(NumberOfChannels,NumberOfUsers) ->
     rand:seed_s(exsplus, {0, 0, 0}),
-    NumberOfChannels = 10,
-    NumberOfUsers = 5000,
+    % NumberOfChannels = 10,
+    % NumberOfUsers = 5000,
     ChannelNames = lists:seq(1, NumberOfChannels),
     UserNames = lists:seq(1, NumberOfUsers),
     Channels = dict:from_list(lists:map(fun (Name) ->
@@ -134,35 +139,30 @@ initialize_server_and_some_clients(Fun) ->
         lists:seq(1, NumberOfActiveUsers)),
     {ServerPid, Channels, Users, Clients}.
 
-% Creates a server with 10 channels and 5000 users, and logs in 100 users.
+% Creates a server with a certain number of channels and users, and logs in every user.
 % `Fun(I)` is executed on the clients after log in, where I is the client's
 % index, which is also its corresponding user's name.
-% initialize_server_and_some_clients_distributed(Fun, NumberOfActiveUsers) ->
-%     {ServerPid, Channels, Users} = initialize_server_distributed(),
-%     % NumberOfActiveUsers = 100,
-%     BenchmarkerPid = self(),
-%     Clients = lists:map(fun (I) ->
-%         ClientPid = spawn_link(fun () ->
-%             server:log_in(ServerPid, I),
-%             receive {self(), logged_in, Pid} ->
-
-%             %await for the main server reply
-%             BenchmarkerPid ! {logged_in, I},
-%             Fun(I)
-%         end),
-%         {I, ClientPid}
-%         end,
-%         lists:seq(1, NumberOfActiveUsers)),
-%     % Ensure that all log-ins have finished before proceeding
-%     lists:foreach(fun (I) ->
-%             receive {logged_in, I} ->
-%                 ok
-%             end
-%         end,
-%         lists:seq(1, NumberOfActiveUsers)),
-%     {ServerPid, Channels, Users, Clients}.
-
-
+initialize_server_and_some_clients_distributed(NumberOfChannels, NumberOfUsers, NumberOfActiveUsers, Fun) ->
+    {ServerPid, Channels, Users} = initialize_server_distributed(NumberOfChannels, NumberOfUsers),    
+    BenchmarkerPid = self(),    
+    Clients = lists:map(fun (I) ->
+        ClientPid = spawn_link(fun () ->
+            {ChatServerPid, logged_in} = server:log_in(ServerPid, I),
+            BenchmarkerPid ! {self(), logged_in, I, ChatServerPid},
+            Fun(I)
+        end),        
+        {I, ClientPid}
+        end,
+        lists:seq(1, NumberOfActiveUsers)),
+    %ClientsDict = initialize_clients_dict(Clients, dict:new()),
+    % Ensure that all log-ins have finished before proceeding
+    FinalClients = lists:map(fun (I) ->
+            receive {ClientPid, logged_in, I, ChatServerPid} ->                
+                {I, {ClientPid,ChatServerPid}}
+            end
+        end,
+        lists:seq(1, NumberOfActiveUsers)),
+    {ServerPid, Channels, Users, dict:from_list(FinalClients)}.
 
 % Send a message for 1000 users, and wait for all of them to be broadcast
 % (repeated 30 times).
@@ -203,31 +203,50 @@ send_message_for_users(ServerPid, ChosenUserNames, Users, Clients) ->
         end,
         ChosenUserNames).
 
+% Helper function: receives new messages and notifies benchmarker for each
+% received message.
+receive_new_messages(BenchmarkerPid, I) ->
+    receive {_, new_message, _} ->
+        BenchmarkerPid ! {ok, I}
+    end,
+    receive_new_messages(BenchmarkerPid, I).
+
+% SEND MESSAGES DISTRIBUTED %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Send a message for 1000 users, and wait for all of them to be broadcast
 % (repeated 30 times).
-% test_send_message_distributed() ->
-%     run_benchmark("send_message_for_each_user_distributed",
-%         fun () ->
-%             BenchmarkerPid = self(),
-%             ClientFun = fun(I) ->
-%                 receive_new_messages(BenchmarkerPid, I)
-%             end,
-%             {ServerPid, _Channels, Users, Clients} =
-%                 initialize_server_and_some_clients_distributed(ClientFun),
-%             ChosenUserNames = lists:sublist(dict:fetch_keys(Users), 1000),
-%             send_message_for_users_distributed(ServerPid, ChosenUserNames, Users, Clients)
-%         end,
-%         30).
+test_send_message_distributed() ->
+    ChannelsNumber =1,
+    UserNumber = 1000,    
+    run_benchmark("send_message_for_each_user",
+        fun () ->
+            BenchmarkerPid = self(),
+            ClientFun = fun(I) ->
+                receive_new_messages(BenchmarkerPid, I)
+            end,
+            io:format("Initializing scenario~n"),
+            {ServerPid, _Channels, Users, Clients} =
+                initialize_server_and_some_clients_distributed(ChannelsNumber,UserNumber, UserNumber,ClientFun),
+            ChosenUserNames = lists:sublist(dict:fetch_keys(Users), UserNumber),
+            send_message_for_users_distributed(ServerPid, ChosenUserNames, Users, Clients)
+        end,
+        30).
 
 send_message_for_users_distributed(ServerPid, ChosenUserNames, Users, Clients) ->
     % For each of the chosen users, send a message to channel 1.
+    io:format("sending messages~n"), 
     lists:foreach(fun (UserName) ->
-            server:send_message(ServerPid, UserName, 1, "Test")
+            %fetch the clients entry so we have the chat server pid
+            % {UN, {ClientPid, ChatServerPid}} DICT entry with key and value            
+            {ClientPid, ChatServerPid} = dict:fetch(UserName,Clients),
+            %send the message            
+            server:send_message(ChatServerPid, UserName, 1, "Test")
         end,
         ChosenUserNames),
+    io:format("awaiting responses~n"), 
     % For each of the active clients, that subscribe to channel 1, wait until
     % messages arrive.
-    ClientUserNames = lists:map(fun ({ClName, _ClPid}) -> ClName end, Clients),
+    % ClientUserNames = lists:map(fun ({ClName, _ClPid}) -> ClName end, Clients),
+    ClientUserNames = dict:fetch_keys(Clients),
     ClientsSubscribedTo1 = lists:filter(fun (UN) ->
         {user, UN, Subscriptions} = dict:fetch(UN, Users),
         sets:is_element(1, Subscriptions)
@@ -241,17 +260,7 @@ send_message_for_users_distributed(ServerPid, ChosenUserNames, Users, Clients) -
             ExpectedResponses)
         end,
         ChosenUserNames).
-
-% Helper function: receives new messages and notifies benchmarker for each
-% received message.
-receive_new_messages(BenchmarkerPid, I) ->
-    receive {_, new_message, _} ->
-        BenchmarkerPid ! {ok, I}
-    end,
-    receive_new_messages(BenchmarkerPid, I).
-
-
-
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % Get the history of 100000 channels (repeated 30 times).
 test_get_channel_history() ->
@@ -265,12 +274,47 @@ test_get_channel_history() ->
             lists:seq(1, 100000))
         end,
         30).
+test_get_channel_history_distributed() ->
+    ChannelsNumber =1,
+    UserNumber = 1000,    
+    run_benchmark("send_message_for_each_user",
+        fun () ->
+            BenchmarkerPid = self(),
+            ClientFun = fun(I) ->
+                receive_new_messages(BenchmarkerPid, I)
+            end,
+            io:format("Initializing scenario~n"),
+            {ServerPid, _Channels, Users, Clients} =
+                initialize_server_and_some_clients_distributed(ChannelsNumber,UserNumber, UserNumber,ClientFun),
+            ChosenUserNames = lists:sublist(dict:fetch_keys(Users), UserNumber),
+            send_message_for_users_distributed(ServerPid, ChosenUserNames, Users, Clients)
+        end,
+        30).
 
 
+
+
+
+
+
+
+test_login_distributed() ->
+    run_benchmark("login",
+    fun() ->
+            login_distributed(5000)
+            end,
+        30).
+
+test_login_centralized() ->
+    run_benchmark("login",
+    fun() ->
+            login_centralized(5000)
+            end,
+        30).
 %test for login time
-test_login_distributed(NumberOfActiveUsers) ->
+login_distributed(NumberOfActiveUsers) ->
     % Creates a server with 10 channels and 5000 users.
-    {ServerPid, Channels, Users} = initialize_server_distributed(),    
+    {ServerPid, Channels, Users} = initialize_server_distributed(10, 5000),    
     % NumberOfActiveUsers = 100,
     BenchmarkerPid = self(),
     Clients = lists:map(fun (I) ->
@@ -287,6 +331,26 @@ test_login_distributed(NumberOfActiveUsers) ->
                 ok
             end
         end,
+        lists:seq(1, NumberOfActiveUsers)).
+
+%test for login time
+login_centralized(NumberOfActiveUsers) ->
+    % Creates a server with 10 channels and 5000 users.
+    {ServerPid, Channels, Users} = initialize_server(),
+    % NumberOfActiveUsers = 100,
+    BenchmarkerPid = self(),
+    Clients = lists:map(fun (I) ->
+        ClientPid = spawn_link(fun () ->
+            server:log_in(ServerPid, I),            
+            BenchmarkerPid ! {logged_in, I}            
+        end),
+        {I, ClientPid}
+        end,
         lists:seq(1, NumberOfActiveUsers)),
-        okidokie.
-    
+    % Ensure that all log-ins have finished before proceeding
+    lists:foreach(fun (I) ->
+            receive {logged_in, I} ->
+                ok
+            end
+        end,
+        lists:seq(1, NumberOfActiveUsers)).    
